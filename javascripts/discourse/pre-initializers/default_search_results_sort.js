@@ -1,6 +1,12 @@
 import { withPluginApi } from "discourse/lib/plugin-api";
 import { isValidSearchTerm } from "discourse/lib/search";
-import { DEFAULT_TYPE_FILTER } from "discourse/widgets/search-menu";
+import { scheduleOnce } from "@ember/runloop";
+import {
+  CATEGORY_SLUG_REGEXP,
+  DEFAULT_TYPE_FILTER,
+  SUGGESTIONS_REGEXP,
+  USERNAME_REGEXP,
+} from "discourse/widgets/search-menu";
 
 const PLUGIN_ID = "default-search-results-sorting";
 
@@ -32,8 +38,48 @@ export default {
       return;
     }
 
-    const cleanTerm = (term) => {
+    function cleanTerm(term) {
       return term.replace(defaultSorting, "").trim();
+    }
+
+    function cleanRecentSearches(currentUser) {
+      if (currentUser) {
+        let recentSearches = Object.assign(currentUser.recent_searches || []);
+        recentSearches = recentSearches
+          .map((term) => cleanTerm(term))
+          .filter((term) => term);
+
+        currentUser.set("recent_searches", recentSearches);
+      }
+    }
+
+    function includesTopics(searchData) {
+      return searchData.typeFilter !== DEFAULT_TYPE_FILTER;
+    }
+
+    const matchesSuggestions = (searchData) => {
+      const term = searchData.term.trim();
+
+      if (term === undefined || includesTopics(searchData)) {
+        return false;
+      }
+
+      const categoriesMatch = term.match(CATEGORY_SLUG_REGEXP);
+      if (categoriesMatch) {
+        return { type: "category", categoriesMatch };
+      }
+
+      const usernamesMatch = term.match(USERNAME_REGEXP);
+      if (usernamesMatch) {
+        return { type: "username", usernamesMatch };
+      }
+
+      const suggestionsMatch = term.match(SUGGESTIONS_REGEXP);
+      if (suggestionsMatch) {
+        return suggestionsMatch;
+      }
+
+      return false;
     };
 
     /**
@@ -59,15 +105,31 @@ export default {
       pluginId: PLUGIN_ID,
 
       html(attrs) {
-        if (attrs.term?.includes(defaultSorting)) {
-          attrs.term = cleanTerm(attrs.term);
+        const {
+          invalidTerm,
+          inPMInboxContext,
+          term,
+          suggestionKeyword,
+          noResults,
+          searchTopics,
+        } = attrs;
+
+        if (
+          suggestionKeyword !== false &&
+          suggestionKeyword?.includes(defaultSorting)
+        ) {
+          attrs.suggestionKeyword = cleanTerm(suggestionKeyword);
         }
 
         if (
-          attrs.suggestionKeyword !== false &&
-          attrs.suggestionKeyword?.includes(defaultSorting)
+          !(searchTopics && (invalidTerm || noResults)) ||
+          ((!term || !searchTopics) && !inPMInboxContext)
         ) {
-          attrs.suggestionKeyword = cleanTerm(attrs.suggestionKeyword);
+          cleanRecentSearches(this.currentUser);
+        }
+
+        if (term?.includes(defaultSorting)) {
+          attrs.term = cleanTerm(term);
         }
 
         return this._super(attrs);
@@ -78,38 +140,59 @@ export default {
      * Search menu
      * -
      * Adds the default sorting to the search term.
-     * Hides the sort order option from the recent searches.
+     * Hides the sorting option from the recent searches.
      */
     api.reopenWidget("search-menu", {
       pluginId: PLUGIN_ID,
 
+      /**
+       * Search menu
+       * -
+       * Adds the default sorting to the search term.
+       */
       triggerSearch() {
         if (
           !this.searchData.term ||
           !isValidSearchTerm(this.searchData.term, this.siteSettings)
         ) {
+          this._super(...arguments);
           return;
         }
 
-        if (
-          !this.searchData.term.includes(defaultSorting) &&
-          !this.searchData.term.includes("order:")
-        ) {
-          this.searchData.term += ` ${defaultSorting}`;
+        if (!this.searchData.term.includes(defaultSorting)) {
+          const matchSuggestions = matchesSuggestions(this.searchData);
+
+          if (
+            !matchSuggestions ||
+            !this.searchData.term.includes("order:") ||
+            (matchSuggestions.type !== "category" &&
+              matchSuggestions.type !== "username")
+          ) {
+            this.searchData.term += ` ${defaultSorting}`;
+          }
         }
 
         this._super(...arguments);
+      },
 
-        const includesTopics = () =>
-          this.searchData.typeFilter !== DEFAULT_TYPE_FILTER;
+      /**
+       * Search menu
+       * -
+       * Cleans input. The next time the user opens the search menu,
+       * the sorting option is added to the search term in some situations.
+       */
+      html(attrs, state) {
+        const content = this._super(attrs, state);
 
-        if (includesTopics() && this.currentUser) {
-          let recentSearches = Object.assign(
-            this.currentUser.recent_searches || []
-          );
-          recentSearches = recentSearches.map((term) => cleanTerm(term));
-          this.currentUser.set("recent_searches", recentSearches);
-        }
+        scheduleOnce("afterRender", () => {
+          const searchInput = document.getElementById("search-term");
+
+          if (searchInput?.value.includes(defaultSorting)) {
+            searchInput.value = cleanTerm(searchInput.value);
+          }
+        });
+
+        return content;
       },
     });
   },
