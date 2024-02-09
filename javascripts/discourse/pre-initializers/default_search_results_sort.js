@@ -17,7 +17,7 @@ export default {
 
       init() {
         this._super(...arguments);
-        this.set("sortOrder", defaultSortingIndex);
+        this.set("sortOrder", 1 /* latest post */);
       },
     });
 
