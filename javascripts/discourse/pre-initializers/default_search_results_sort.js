@@ -8,20 +8,6 @@ export default {
 
   initializeWithApi(api) {
     /**
-     * Full page search
-     * -
-     * Changes the default sorting.
-     */
-    api.modifyClass("controller:full-page-search", {
-      pluginId: PLUGIN_ID,
-
-      init() {
-        this._super(...arguments);
-        this.set("sortOrder", 1 /* latest post */);
-      },
-    });
-
-    /**
      * Search menu
      * -
      * Changes the default sorting.
